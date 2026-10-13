@@ -1,0 +1,35 @@
+import { NextResponse } from "next/server";
+import { getSupabase } from "@/lib/supabase";
+import { participantFromRequest } from "@/lib/participant-auth";
+import { ruleTags, validAnswers } from "@/lib/quiz";
+
+export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {
+  try {
+    const { id } = await ctx.params;
+    const body = await req.json();
+    const actor = await participantFromRequest(req);
+    if (!actor) return NextResponse.json({ error: "请重新扫码进入" }, { status: 401 });
+    if (actor.id !== id) return NextResponse.json({ error: "无权修改该资料" }, { status: 403 });
+    const sb = getSupabase();
+    const { data: existing } = await sb.from("participants").select("*").eq("id", id).maybeSingle();
+    if (!existing) return NextResponse.json({ error: "参与者不存在" }, { status: 404 });
+
+    const updates: Record<string, unknown> = {};
+    if (body.nickname) updates.nickname = String(body.nickname).slice(0, 20);
+    if (body.avatar) updates.avatar = String(body.avatar);
+    if (body.gender) updates.gender = body.gender;
+    if (body.gender_preference) updates.gender_preference = body.gender_preference;
+    if (body.answers) {
+      if (!validAnswers(body.answers)) return NextResponse.json({ error: "请完成全部 10 题且只选指定选项" }, { status: 400 });
+      updates.answers = body.answers;
+      updates.tags = ruleTags(body.answers);
+      updates.ai_profile = { source: "rule" };
+    }
+
+    const { data, error } = await sb.from("participants").update(updates).eq("id", id).select().single();
+    if (error) throw new Error(error.message);
+    return NextResponse.json({ participant: data });
+  } catch (err) {
+    return NextResponse.json({ error: err instanceof Error ? err.message : "保存失败" }, { status: 500 });
+  }
+}
